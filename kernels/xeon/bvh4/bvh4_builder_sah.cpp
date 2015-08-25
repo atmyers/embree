@@ -89,9 +89,10 @@ namespace embree
           presplitFactor((mode & MODE_HIGH_QUALITY) ? 1.5f : 1.0f) {}
 
       // FIXME: shrink bvh->alloc in destructor here an in other builders too
-
-      void build(size_t, size_t) 
+		
+      void build(size_t, size_t)
       {
+		 
 	/* skip build for empty scene */
 	const size_t numPrimitives = mesh ? mesh->size() : scene->getNumPrimitives<Mesh,1>();
         if (numPrimitives == 0) {
@@ -104,6 +105,7 @@ namespace embree
         /* tree rotations */
 	auto rotate = [&] (BVH4::Node* node, const size_t* counts, const size_t N) -> size_t
 	{
+		
           size_t n = 0;
 #if ROTATE_TREE
 	  assert(N <= BVH4::N);
@@ -121,13 +123,14 @@ namespace embree
 #endif
 	  return n;
 	};
-
+ 
         double t0 = bvh->preBuild(mesh ? nullptr : TOSTRING(isa) "::BVH4BuilderSAH");
-
+		  
 #if PROFILE
 	profile(2,20,numPrimitives,[&] (ProfileTimer& timer)
         {
 #endif
+			
           bvh->alloc.init_estimate(numSplitPrimitives*sizeof(PrimRef));
 	    prims.resize(numSplitPrimitives);
             auto progress = [&] (size_t dn) { bvh->scene->progressMonitor(dn); };
@@ -412,7 +415,7 @@ namespace embree
     {
       __forceinline CreateBVH4NodeMB (BVH4* bvh) : bvh(bvh) {}
       
-      __forceinline BVH4::NodeMB* operator() (const isa::BVHBuilderBinnedSAH::BuildRecord& current, BVHBuilderBinnedSAH::BuildRecord* children, const size_t N, Allocator* alloc) 
+      __forceinline BVH4::NodeMB* operator() (const isa::BVHBuilderBinnedSAH::BuildRecord& current, BVHBuilderBinnedSAH::BuildRecord* children, const size_t N, Allocator* alloc)
       {
         BVH4::NodeMB* node = (BVH4::NodeMB*) alloc->alloc0.malloc(sizeof(BVH4::NodeMB)); node->clear();
         for (size_t i=0; i<N; i++) {
@@ -471,14 +474,16 @@ namespace embree
 
       void build(size_t, size_t) 
       {
+		  
 	/* skip build for empty scene */
 	const size_t numPrimitives = mesh ? mesh->size() : scene->getNumPrimitives<Mesh,2>();
         if (numPrimitives == 0) {
           prims.clear();
           bvh->clear();
+			
           return;
         }
-      
+      std::cout << "Entering builder!" << std::endl;
 	/* reduction function */
 	auto reduce = [] (BVH4::NodeMB* node, const std::pair<BBox3fa,BBox3fa>* bounds, const size_t N) -> std::pair<BBox3fa,BBox3fa>
 	{

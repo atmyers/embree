@@ -44,21 +44,126 @@ namespace embree
     struct CreateBVH8Node
     {
       __forceinline CreateBVH8Node (BVH8* bvh) : bvh(bvh) {}
-      
-      __forceinline int operator() (const isa::BVHBuilderBinnedSAH::BuildRecord& current, BVHBuilderBinnedSAH::BuildRecord* children, const size_t N, Allocator* alloc) 
+
+      __forceinline int operator() (const isa::BVHBuilderBonsai::BuildRecord& current, BVHBuilderBonsai::BuildRecord* children, const size_t N, Allocator* alloc)
       {
         BVH8::Node* node = nullptr;
-        //if (current.pinfo.size() > 4096) node = (BVH8::Node*)   bvh->alloc2.malloc(sizeof(BVH8::Node),sizeof(BVH8::Node));
-        //else
-        node = (BVH8::Node*) alloc->alloc0.malloc(sizeof(BVH8::Node), 1 << BVH8::alignment); 
+        node = (BVH8::Node*) alloc->alloc0.malloc(sizeof(BVH8::Node), 1 << BVH8::alignment);
         node->clear();
         for (size_t i=0; i<N; i++) {
           node->set(i,children[i].pinfo.geomBounds);
           children[i].parent = (size_t*) &node->child(i);
         }
         *current.parent = bvh->encodeNode(node);
-	return 0;
+
+		return 0;
       }
+
+		__forceinline int operator() (const isa::BVHBuilderBonsai::BuildRecord& current, BVHBuilderBonsai::BuildRecord* children, const size_t N, Allocator* alloc, int& underFilledNodes)
+		{
+			BVH8::Node* node = nullptr;
+			node = (BVH8::Node*) alloc->alloc0.malloc(sizeof(BVH8::Node), 1 << BVH8::alignment);
+			node->clear();
+			for (size_t i=0; i<N; i++) {
+				node->set(i,children[i].pinfo.geomBounds);
+				node->child(i) = BVH8::NodeRef(*children[i].parent);
+			}
+
+			*current.parent = bvh->encodeNode(node);
+#if 0
+      if (N < 8) {
+        int index = -1;
+        float area = -1;
+        for (int i = 0; i < N; i++) {
+          if (node->child(i).isNode()) {
+            float a = halfArea(children[i].pinfo.geomBounds);
+            if (a > area) {
+              area = a;
+              index = i;
+            }
+          }
+        }
+
+        if (index != -1) {
+          BVH8::Node* next = node->child(index).node();
+          int j = 7;
+          int k = N;
+          while (j >= 1 && k < 8) {
+            if (next->child(j) != BVH8::emptyNode) {
+              node->set(k, next->bounds(j));
+              node->child(k) = next->child(j);
+              next->child(j) = BVH8::emptyNode;
+              k++;
+            }
+            j--;
+          }
+          if (j == 0) {
+            node->set(index, next->bounds(j));
+            node->child(index) = next->child(j);
+            next->child(j) = BVH8::emptyNode;
+            if (k < 8)
+              underFilledNodes++;
+          }
+          else {
+            compactNode(next, j+1, underFilledNodes);
+          }
+        }
+        else {
+          underFilledNodes++;
+        }
+      }
+#else
+  if (N < 8)
+    underFilledNodes++;
+#endif
+
+			return 0;
+		}
+
+    void compactNode(BVH8::Node* node, const int N, int& underFilledNodes) {
+      if (N < 8) {
+        int index = -1;
+        float area = -1;
+        for (int i = 0; i < N; i++) {
+          if (node->child(i).isNode()) {
+            float a = halfArea(node->bounds(i));
+            if (a > area) {
+              area = a;
+              index = i;
+            }
+          }
+        }
+
+        if (index != -1) {
+          BVH8::Node* next = node->child(index).node();
+          int j = 7;
+          int k = N;
+          while (j >= 1 && k < 8) {
+            if (next->child(j) != BVH8::emptyNode) {
+              node->set(k, next->bounds(j));
+              node->child(k) = next->child(j);
+              next->child(j) = BVH8::emptyNode;
+              k++;
+            }
+            j--;
+          }
+          if (j == 0) {
+            node->set(index, next->bounds(j));
+            node->child(index) = next->child(j);
+            next->child(j) = BVH8::emptyNode;
+            if (k < 8)
+              underFilledNodes++;
+          }
+          else {
+            compactNode(next, j+1, underFilledNodes);
+          }
+        }
+        else {
+          underFilledNodes++;
+        }
+
+      }
+    }
 
       BVH8* bvh;
     };
@@ -67,8 +172,8 @@ namespace embree
     struct CreateBVH8Leaf
     {
       __forceinline CreateBVH8Leaf (BVH8* bvh, PrimRef* prims) : bvh(bvh), prims(prims) {}
-      
-      __forceinline int operator() (const BVHBuilderBinnedSAH::BuildRecord& current, Allocator* alloc)
+
+      __forceinline int operator() (const BVHBuilderBonsai::BuildRecord& current, Allocator* alloc)
       {
         size_t items = Primitive::blocks(current.prims.size());
         size_t start = current.prims.begin();
@@ -81,11 +186,24 @@ namespace embree
 	return 1;
       }
 
+		__forceinline int operator() (const BVHBuilderBonsai::BuildRecord& current, PrimRef* gatheredRefs, Allocator* alloc)
+		{
+			size_t items = Primitive::blocks(current.prims.size());
+			size_t start = 0; //< gathered refs start at 0 instead of current.prims.begin();
+			Primitive* accel = (Primitive*) alloc->alloc1.malloc(items*sizeof(Primitive), 1 << BVH8::alignment);
+			BVH8::NodeRef node = bvh->encodeLeaf((char*)accel,items);
+			for (size_t i=0; i<items; i++) {
+				accel[i].fill(gatheredRefs,start,current.prims.size(),bvh->scene,false); //< last ref is prims.size() instead of prims.end()
+			}
+			*current.parent = node;
+			return 1;
+		}
+
       BVH8* bvh;
       PrimRef* prims;
     };
-    
-    /************************************************************************************/ 
+
+    /************************************************************************************/
     /************************************************************************************/
     /************************************************************************************/
     /************************************************************************************/
@@ -122,7 +240,7 @@ namespace embree
           return;
         }
         const size_t numSplitPrimitives = max(numPrimitives,size_t(presplitFactor*numPrimitives));
-      
+
         /* verbose mode */
         if ((State::instance()->verbosity(1) && mesh == nullptr))
 	  std::cout << "building BVH8<" << bvh->primTy.name << "> with " << TOSTRING(isa) "::BVH8BuilderSAH " << (presplitFactor != 1.0f ? "presplit" : "") << " ... " << std::flush;
@@ -132,32 +250,33 @@ namespace embree
 	profile(2,20,numPrimitives,[&] (ProfileTimer& timer)
         {
 #endif
-	    
+
           if ((State::instance()->benchmark || State::instance()->verbosity(1)) && mesh == nullptr) t0 = getSeconds();
-          
+
           auto progress = [&] (size_t dn) { bvh->scene->progressMonitor(dn); };
           auto virtualprogress = BuildProgressMonitorFromClosure(progress);
-          
+
 	    bvh->alloc2.init_estimate(numSplitPrimitives*sizeof(PrimRef));
 	    prims.resize(numSplitPrimitives);
 	    PrimInfo pinfo = mesh ? createPrimRefArray<Mesh>(mesh,prims,virtualprogress) : createPrimRefArray<Mesh,1>(scene,prims,virtualprogress);
             if (presplitFactor > 1.0f)
               pinfo = presplit<Mesh>(scene, pinfo, prims);
-	    BVH8::NodeRef root; 
-            BVHBuilderBinnedSAH::build<BVH8::NodeRef>
+	    BVH8::NodeRef root;
+            BVHBuilderBonsai::build<BVH8::NodeRef>
               (root,CreateBVH8Alloc(bvh),CreateBVH8Node(bvh),CreateBVH8Leaf<Primitive>(bvh,prims.data()), progress,
                prims.data(),pinfo,BVH8::N,BVH8::maxBuildDepthLeaf,sahBlockSize,minLeafSize,maxLeafSize,BVH8::travCost,intCost);
 
             bvh->set(root,pinfo.geomBounds,pinfo.size());
-            bvh->layoutLargeNodes(numSplitPrimitives*0.005f);
+            //bvh->layoutLargeNodes(numSplitPrimitives*0.005f);
 
 	    if ((State::instance()->benchmark || State::instance()->verbosity(1)) && mesh == nullptr) dt = getSeconds()-t0;
 
 #if PROFILE
            dt = timer.avg();
-        }); 
-#endif	
+        });
+#endif
 
+//  exit(0);
 	/* clear temporary data for static geometry */
 	bool staticGeom = mesh ? mesh->isStatic() : scene->isStatic();
 	if (staticGeom) prims.clear();
@@ -185,16 +304,16 @@ namespace embree
     Builder* BVH8Triangle4SceneBuilderBonsai  (void* bvh, Scene* scene, size_t mode) { return new BVH8BuilderBonsai<TriangleMesh,Triangle4>((BVH8*)bvh,scene,4,4,1.0f,4,inf,mode); }
     Builder* BVH8Triangle8SceneBuilderBonsai  (void* bvh, Scene* scene, size_t mode) { return new BVH8BuilderBonsai<TriangleMesh,Triangle8>((BVH8*)bvh,scene,8,4,1.0f,8,inf,mode); }
 
-    /************************************************************************************/ 
     /************************************************************************************/
     /************************************************************************************/
     /************************************************************************************/
-
+    /************************************************************************************/
+#if 0
     struct CreateListBVH8Node // FIXME: merge with above class
     {
       __forceinline CreateListBVH8Node (BVH8* bvh) : bvh(bvh) {}
-      
-      __forceinline BVH8::Node* operator() (const isa::BVHBuilderBinnedSpatialSAH::BuildRecord& current, BVHBuilderBinnedSpatialSAH::BuildRecord* children, const size_t N, Allocator* alloc) 
+
+      __forceinline BVH8::Node* operator() (const isa::BVHBuilderBinnedSpatialSAH::BuildRecord& current, BVHBuilderBinnedSpatialSAH::BuildRecord* children, const size_t N, Allocator* alloc)
       {
         BVH8::Node* node = (BVH8::Node*) alloc->alloc0.malloc(sizeof(BVH8::Node), 1 << BVH8::alignment); node->clear();
         for (size_t i=0; i<N; i++) {
@@ -208,11 +327,12 @@ namespace embree
       BVH8* bvh;
     };
 
+
     template<typename Primitive>
     struct CreateBVH8ListLeaf
     {
       __forceinline CreateBVH8ListLeaf (BVH8* bvh) : bvh(bvh) {}
-      
+
       __forceinline size_t operator() (BVHBuilderBinnedSpatialSAH::BuildRecord& current, Allocator* alloc) // FIXME: why are prims passed here but not for createNode
       {
         size_t n = current.pinfo.size();
@@ -237,7 +357,7 @@ namespace embree
         PrimRefList::block_iterator_unsafe iter(current.prims);
         for (size_t i=0; i<N; i++) leaf[i].fill(iter,bvh->scene,false);
         assert(!iter);
-        
+
         /* free all primitive blocks */
         while (PrimRefList::item* block = current.prims.take())
           delete block;
@@ -248,5 +368,6 @@ namespace embree
 
       BVH8* bvh;
     };
+#endif
   }
 }

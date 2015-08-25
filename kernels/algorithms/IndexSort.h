@@ -19,6 +19,6 @@ void sortedIndicesFromFloats(float* __restrict values, unsigned* __restrict indi
 // Everything needs to be aligned and padded:
 //  values - pad with 128 bytes
 //  indices - pad with 256 bytes
-void sortedIndicesFromFloatsX3(float* __restrict valuesA, float* __restrict valuesB, float* __restrict valuesC, unsigned* __restrict indicesA, unsigned* __restrict indicesB, unsigned* __restrict indicesC, unsigned count);
+void sortedIndicesFromFloatsX3(float* __restrict valuesA, float* __restrict valuesB, float* __restrict valuesC, unsigned* __restrict indicesA, unsigned* __restrict indicesB, unsigned* __restrict indicesC, unsigned count, int offset);
 
 #endif

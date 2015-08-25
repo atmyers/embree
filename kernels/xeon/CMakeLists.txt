@@ -57,6 +57,7 @@ ADD_ISPC_LIBRARY(embree ${EMBREE_LIB_TYPE}
   ../../common/tasking/taskscheduler_tbb.cpp
   ../../common/tasking/tasksys.cpp
 
+
   ../algorithms/parallel_for.cpp
   ../algorithms/parallel_reduce.cpp
   ../algorithms/parallel_prefix_sum.cpp
@@ -91,7 +92,7 @@ ADD_ISPC_LIBRARY(embree ${EMBREE_LIB_TYPE}
   geometry/instance_intersector1.cpp
   geometry/instance_intersector4.cpp
   geometry/subdivpatch1_intersector1.cpp
-  geometry/subdivpatch1cached_intersector1.cpp		
+  geometry/subdivpatch1cached_intersector1.cpp
   builders/primrefgen.cpp
 
   bvh4/bvh4.cpp
@@ -165,10 +166,12 @@ IF (TARGET_AVX)
     bvh8/bvh8_statistics.cpp
     bvh8/bvh8_builder_sah.avx.cpp
 
+
     bvh8/bvh8_intersector1.cpp
     bvh8/bvh8_intersector4_hybrid.cpp
     bvh8/bvh8_intersector8_chunk.cpp
     bvh8/bvh8_intersector8_hybrid.cpp
+
   )
 
   SET_TARGET_PROPERTIES(embree_avx PROPERTIES COMPILE_FLAGS "${FLAGS_AVX}")
@@ -196,6 +199,10 @@ IF (TARGET_AVX2)
     bvh8/bvh8_intersector4_hybrid.cpp
     bvh8/bvh8_intersector8_chunk.cpp
     bvh8/bvh8_intersector8_hybrid.cpp
+    builders/primrefgen.avx.cpp
+    bvh8/bvh8_builder_bonsai.avx.cpp
+    ../algorithms/IndexSort.cpp
+
   )
 
   SET_TARGET_PROPERTIES(embree_avx2 PROPERTIES COMPILE_FLAGS "${FLAGS_AVX2}")

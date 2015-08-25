@@ -38,21 +38,25 @@ namespace embree
 
   DECLARE_BUILDER(void,Scene,size_t,BVH8Triangle4SceneBuilderSAH);
   DECLARE_BUILDER(void,Scene,size_t,BVH8Triangle8SceneBuilderSAH);
+	DECLARE_BUILDER(void,Scene,size_t,BVH8Triangle4SceneBuilderBonsai);
+
 
   DECLARE_BUILDER(void,Scene,size_t,BVH8Triangle4SceneBuilderSpatialSAH);
   DECLARE_BUILDER(void,Scene,size_t,BVH8Triangle8SceneBuilderSpatialSAH);
 
-  void BVH8Register () 
+  void BVH8Register ()
   {
     int features = getCPUFeatures();
 
     /* select builders */
     SELECT_SYMBOL_AVX(features,BVH8Triangle4SceneBuilderSAH);
     SELECT_SYMBOL_AVX(features,BVH8Triangle8SceneBuilderSAH);
-    
+
+	  SELECT_SYMBOL_AVX2(features,BVH8Triangle4SceneBuilderBonsai);
+
     SELECT_SYMBOL_AVX(features,BVH8Triangle4SceneBuilderSpatialSAH);
     SELECT_SYMBOL_AVX(features,BVH8Triangle8SceneBuilderSpatialSAH);
- 
+
     /* select intersectors1 */
     SELECT_SYMBOL_AVX_AVX2(features,BVH8Triangle4Intersector1Moeller);
     SELECT_SYMBOL_AVX_AVX2(features,BVH8Triangle8Intersector1Moeller);
@@ -74,10 +78,10 @@ namespace embree
 
   BVH8::BVH8 (const PrimitiveType& primTy, Scene* scene)
     : primTy(primTy), scene(scene), root(emptyNode),
-      numPrimitives(0), numVertices(0) {}
+	numPrimitives(0), numVertices(0) {}
 
   BVH8::~BVH8 () {
-    for (size_t i=0; i<objects.size(); i++) 
+    for (size_t i=0; i<objects.size(); i++)
       delete objects[i];
   }
 
@@ -86,7 +90,7 @@ namespace embree
   {
     /* allocate as much memory as likely needed and reserve conservative amounts of memory */
     size_t blockSize = LinearAllocatorPerThread::allocBlockSize;
-    
+
     size_t numPrimBlocks = primTy.blocks(numPrimitives);
     size_t numAllocatedNodes      = min(size_t(0.6*numPrimBlocks),numPrimitives);
     size_t numAllocatedPrimitives = min(size_t(1.2*numPrimBlocks),numPrimitives);
@@ -97,7 +101,7 @@ namespace embree
     size_t numReservedNodes = 1.5*numAllocatedNodes;
     size_t numReservedPrimitives = 1.5*numAllocatedPrimitives;
 #endif
-    
+
     size_t bytesAllocated = numAllocatedNodes * nodeSize + numAllocatedPrimitives * primTy.bytes; // required also for parallel split stage in BVH4BuilderFast
     size_t bytesReserved  = numReservedNodes  * nodeSize + numReservedPrimitives  * primTy.bytes;
     if (numPrimitives) bytesReserved = (bytesReserved+blockSize-1)/blockSize*blockSize + numThreads*blockSize*2;
@@ -108,25 +112,25 @@ namespace embree
   }
 #endif
 
-  void BVH8::clear() 
+  void BVH8::clear()
   {
     set(BVH8::emptyNode,empty,0);
     alloc2.clear();
   }
-  
+
   void BVH8::set (NodeRef root, const BBox3fa& bounds, size_t numPrimitives)
   {
     this->root = root;
     this->bounds = bounds;
     this->numPrimitives = numPrimitives;
   }
-  
+
    void BVH8::printStatistics()
    {
      std::cout << BVH8Statistics(this).str();
      std::cout << "  "; alloc2.print_statistics();
-   }	
-  
+   }
+
   void BVH8::clearBarrier(NodeRef& node)
   {
     if (node.isBarrier())
@@ -140,7 +144,7 @@ namespace embree
 
   void BVH8::layoutLargeNodes(size_t N)
   {
-    struct NodeArea 
+    struct NodeArea
     {
       __forceinline NodeArea() {}
 
@@ -173,20 +177,20 @@ namespace embree
 
     for (size_t i=0; i<lst.size(); i++)
       lst[i].node->setBarrier();
-      
+
     root = layoutLargeNodesRecursion(root);
   }
-  
+
   BVH8::NodeRef BVH8::layoutLargeNodesRecursion(NodeRef& node)
   {
     if (node.isBarrier()) {
       node.clearBarrier();
       return node;
     }
-    else if (node.isNode()) 
+    else if (node.isNode())
     {
       Node* oldnode = node.node();
-      Node* newnode = (BVH8::Node*) alloc2.threadLocal2()->alloc0.malloc(sizeof(BVH8::Node)); // FIXME: optimize access to threadLocal2 
+      Node* newnode = (BVH8::Node*) alloc2.threadLocal2()->alloc0.malloc(sizeof(BVH8::Node)); // FIXME: optimize access to threadLocal2
       *newnode = *oldnode;
       for (size_t c=0; c<BVH8::N; c++)
         newnode->child(c) = layoutLargeNodesRecursion(oldnode->child(c));
@@ -222,17 +226,17 @@ namespace embree
   }
 
   Accel* BVH8::BVH8Triangle4(Scene* scene)
-  { 
+  {
     BVH8* accel = new BVH8(Triangle4::type,scene);
     Accel::Intersectors intersectors= BVH8Triangle4Intersectors(accel);
-    
+
     Builder* builder = nullptr;
     if      (State::instance()->tri_builder == "default"     ) builder = BVH8Triangle4SceneBuilderSAH(accel,scene,0);
     else if (State::instance()->tri_builder == "binned_sah2" ) builder = BVH8Triangle4SceneBuilderSAH(accel,scene,0);
     else if (State::instance()->tri_builder == "binned_sah2_spatial" ) builder = BVH8Triangle4SceneBuilderSpatialSAH(accel,scene,0);
     else if (State::instance()->tri_builder == "binned_sah2_presplit" ) builder = BVH8Triangle4SceneBuilderSAH(accel,scene,MODE_HIGH_QUALITY);
     else THROW_RUNTIME_ERROR("unknown builder "+State::instance()->tri_builder+" for BVH8<Triangle4>");
-    
+
     return new AccelInstance(accel,builder,intersectors);
   }
 
@@ -244,6 +248,14 @@ namespace embree
     return new AccelInstance(accel,builder,intersectors);
   }
 
+	Accel* BVH8::BVH8Triangle4Bonsai(Scene* scene)
+	{
+		BVH8* accel = new BVH8(Triangle4::type,scene);
+		Accel::Intersectors intersectors = BVH8Triangle4Intersectors(accel);
+		Builder* builder = BVH8Triangle4SceneBuilderBonsai(accel,scene,0);
+		return new AccelInstance(accel,builder,intersectors);
+	}
+
   Accel* BVH8::BVH8Triangle4SpatialSplit(Scene* scene)
   {
     BVH8* accel = new BVH8(Triangle4::type,scene);
@@ -253,17 +265,17 @@ namespace embree
   }
 
   Accel* BVH8::BVH8Triangle8(Scene* scene)
-  { 
+  {
     BVH8* accel = new BVH8(Triangle8::type,scene);
     Accel::Intersectors intersectors= BVH8Triangle8Intersectors(accel);
-    
+
     Builder* builder = nullptr;
     if      (State::instance()->tri_builder == "default"     ) builder = BVH8Triangle8SceneBuilderSAH(accel,scene,0);
     else if (State::instance()->tri_builder == "binned_sah2" ) builder = BVH8Triangle8SceneBuilderSAH(accel,scene,0);
     else if (State::instance()->tri_builder == "binned_sah2_spatial" ) builder = BVH8Triangle8SceneBuilderSpatialSAH(accel,scene,0);
     else if (State::instance()->tri_builder == "binned_sah2_presplit" ) builder = BVH8Triangle8SceneBuilderSAH(accel,scene,MODE_HIGH_QUALITY);
     else THROW_RUNTIME_ERROR("unknown builder "+State::instance()->tri_builder+" for BVH8<Triangle8>");
-    
+
     return new AccelInstance(accel,builder,intersectors);
   }
 
@@ -283,4 +295,3 @@ namespace embree
     return new AccelInstance(accel,builder,intersectors);
   }
 }
-

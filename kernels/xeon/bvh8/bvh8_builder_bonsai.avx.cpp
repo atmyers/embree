@@ -18,6 +18,8 @@
 // ISAs, as a lambda name mangling bug of ICC under Windows causes
 // symbols to conflict.
 
-#include "bvh8_builder_sah.cpp"
-//#include "bvh8_builder_bonsai.cpp"
+
+//created by Per Ganestam
+
+#include "bvh8_builder_bonsai.cpp"
 
