@@ -714,18 +714,7 @@ namespace embree
         /*! builder entry function */
         __forceinline const ReductionTy operator() (BuildRecord& record)
         {
-          if (splitTriangles) {
-            const int MAX_MTS = 8192;
-            const int MIN_MTS = 512;
-            const float y0 = 0.1f;
-            const float y1 = 0.05f;
-            MAX_MINI_TREE_SIZE = numberOfTriangles / 1500;
-            int maxMTS = (MAX_MTS < MAX_MINI_TREE_SIZE ? MAX_MTS : MAX_MINI_TREE_SIZE);
-            MAX_MINI_TREE_SIZE = (512 >= maxMTS ? 512 : maxMTS);
-            PRUNING_THRESHOLD = y0 + (y1 - y0) * (MAX_MINI_TREE_SIZE - MIN_MTS)/(MAX_MTS - MIN_MTS);
-            std::cout << std::endl << "MAX_MINI_TREE_SIZE: " << MAX_MINI_TREE_SIZE << std::endl;
-            std::cout << "PRUNING_THRESHOLD: " << PRUNING_THRESHOLD << std::endl;
-          }
+
 
 			miniTreeRecords.resize((numberOfTriangles/MAX_MINI_TREE_SIZE)*4);
 			miniTreeRecordsPruned.resize((numberOfTriangles/MAX_MINI_TREE_SIZE)*4*64);
