@@ -18,6 +18,8 @@
 
 #include "heuristic_binning.h"
 #include "../algorithms/IndexSort.h"
+#include "common/scene.h"
+#include "presplit.h"
 #include <immintrin.h>
 
 #ifdef _WIN32
@@ -149,10 +151,9 @@ namespace embree
 	  };
 
     /*! Performs standard object binning */
-    template<typename PrimRef, size_t BINS = 32>
+    template<typename PrimRef>
       struct HeuristicBonsai
       {
-        //typedef BinSplit<BINS> Split;
 		  typedef BonsaiSplit Split;
         typedef range<size_t> Set;
 
@@ -160,44 +161,51 @@ namespace embree
         static const size_t PARALLEL_FIND_BLOCK_SIZE = 4096;
         static const size_t PARALLEL_PARITION_BLOCK_SIZE = 64;
 
+				volatile int newIndex = 0;
+
 		FastSweepData** __restrict ThreadLocal;
 
         __forceinline HeuristicBonsai ()
           : prims(nullptr) {}
 
         /*! remember prim array */
-        __forceinline HeuristicBonsai (PrimRef* prims)
-          : prims(prims) {}
-
-        const std::pair<BBox3fa,BBox3fa> computePrimInfoMB(Scene* scene, const PrimInfo& pinfo)
-        {
-          BBox3fa bounds0 = empty;
-          BBox3fa bounds1 = empty;
-          for (size_t i=pinfo.begin; i<pinfo.end; i++) // FIXME: parallelize
-          {
-            Bezier1v& prim = prims[i];
-            const size_t geomID = prim.geomID();
-            const BezierCurves* curves = scene->getBezierCurves(geomID);
-            bounds0.extend(curves->bounds(prim.primID(),0));
-            bounds1.extend(curves->bounds(prim.primID(),1));
-          }
-          return std::pair<BBox3fa,BBox3fa>(bounds0,bounds1);
-        }
+        __forceinline HeuristicBonsai (PrimRef* prims, Scene* scene, int splitIndex)
+          : prims(prims), scene(scene), splitIndex(splitIndex) {}
 
 		  /*! array partitioning */
-		  void split(const Split& split, const PrimInfo& pinfo, const Set& set, PrimInfo& left, Set& lset, PrimInfo& right, Set& rset)
+		  void split(const Split& split, const PrimInfo& pinfo, const Set& set, PrimInfo& left, Set& lset, PrimInfo& right, Set& rset, const bool splitTriangles,
+									const Set& currentIndexRange, Set& leftIndexRange, Set& rightIndexRange)
 		  {
 			  //if (likely(pinfo.size() < PARALLEL_THRESHOLD))
 				  //sequential_split(split,set,left,lset,right,rset);
-					sequential_partition(split,set,left,lset,right,rset);
-			 //else
-				//  parallel_split(split,set,left,lset,right,rset);
+					if (!splitTriangles) {
+
+						if (likely(pinfo.size() < PARALLEL_THRESHOLD*1000000))
+					  	sequential_split(split,set,left,lset,right,rset);
+							//sequential_partition(split,set,left,lset,right,rset);
+							else
+			 				  parallel_split(split,set,left,lset,right,rset);
+
+						//sequential_partition(split,set,left,lset,right,rset);
+					}
+					else {
+						if (split.index) {
+							sequential_split_triangle_partition(split,set,left,lset,right,rset, currentIndexRange, leftIndexRange, rightIndexRange);
+						}
+						else
+							sequential_partition(split,set,left,lset,right,rset);
+					}
+
 		  }
-/*
-			void sequential_split_partition(const Split& split, const Set& set, PrimInfo& left, Set& lset, PrimInfo& right, Set& rset) {
+
+			void sequential_split_triangle_partition(const Split& split, const Set& set, PrimInfo& left, Set& lset, PrimInfo& right, Set& rset, const Set& currentIndexRange, Set& leftIndexRange, Set& rightIndexRange) {
 
 				const size_t begin = set.begin();
 			  const size_t end   = set.end();
+
+				const size_t firstIndex = currentIndexRange.begin();
+				const size_t lastIndex = currentIndexRange.end();
+
 
 				CentGeomBBox3fa local_left(empty);
 				CentGeomBBox3fa local_left_overlap(empty);
@@ -207,59 +215,145 @@ namespace embree
 				CentGeomBBox3fa local_right_overlap(empty);
 				CentGeomBBox3fa local_right_split(empty);
 
-			  const float splitPos = split.pos;
+				mvector<PrimRef> left_prims;
+				mvector<PrimRef> left_overlap_prims;
+				mvector<PrimRef> left_split_prims;
+
+				mvector<PrimRef> right_prims;
+				mvector<PrimRef> right_overlap_prims;
+				mvector<PrimRef> right_split_prims;
+
+
+				left_prims.reserve((end-begin));
+				left_overlap_prims.reserve((end-begin));
+				left_split_prims.reserve((end-begin));
+
+				right_prims.reserve((end-begin));
+				right_overlap_prims.reserve((end-begin));
+				right_split_prims.reserve((end-begin));
+
+				int l=0,lo=0,ls=0;
+				int r=0,ro=0,rs=0;
+
+			  const float splitPos = split.pos*0.5f;
 			  const unsigned int splitDim = split.dim;
 
-				int i = begin;
-				int j = end - 1;
-
-				while (prims[i].center2()[splitDim] <= splitPos) {
-					local_left.extend(prims[i].bounds());
-					++i;
-				}
-
-				while (prims[j].center2()[splitDim] > splitPos) {
-					local_right.extend(prims[j].bounds());
-					--j;
-				}
-
-				while (i < j) {
-
-					xchg(prims[i], prims[j]);
-					local_left.extend(prims[i].bounds());
-
-					local_right.extend(prims[j].bounds());
-					++i;
-					--j;
-
-					while (prims[i].center2()[splitDim] <= splitPos) {
+				for (int i = begin; i < end; i++) {
+					if (prims[i].upper[splitDim] <= splitPos) {
 						local_left.extend(prims[i].bounds());
-						++i;
+						left_prims.push_back(prims[i]);
+						l++;
 					}
-
-					while (prims[j].center2()[splitDim] > splitPos) {
-						local_right.extend(prims[j].bounds());
-						--j;
-					}
-				}
-
-				if (i == j) {
-					if (prims[i].center2()[splitDim] <= splitPos) {
-						local_left.extend(prims[i].bounds());
-						++i;
+					else if (prims[i].lower[splitDim] >= splitPos) {
+						local_right.extend(prims[i].bounds());
+						right_prims.push_back(prims[i]);
+						r++;
 					}
 					else {
-						local_right.extend(prims[i].bounds());
+						PrimRef leftSplit;
+						PrimRef rightSplit;
+						const size_t geomID = prims[i].geomID();
+						const size_t primID = prims[i].primID();
+						const TriangleMesh* mesh = scene->getTriangleMesh(geomID);
+						const TriangleMesh::Triangle& tri = mesh->triangle(primID);
+						const Vec3fa v0 = mesh->vertex(tri.v[0]);
+						const Vec3fa v1 = mesh->vertex(tri.v[1]);
+						const Vec3fa v2 = mesh->vertex(tri.v[2]);
+
+						if (prims[i].center2()[splitDim] <= splitPos*2.f) {
+							local_left_overlap.extend(prims[i].bounds());
+							left_overlap_prims.push_back(prims[i]);
+							lo++;
+						}
+						else {
+							local_right_overlap.extend(prims[i].bounds());
+							right_overlap_prims.push_back(prims[i]);
+							ro++;
+						}
+
+						splitTriangle(prims[i], splitDim, splitPos, v0, v1, v2, leftSplit, rightSplit);
+
+						local_left_split.extend(leftSplit.bounds());
+						left_split_prims.push_back(leftSplit);
+						ls++;
+
+						local_right_split.extend(rightSplit.bounds());
+						right_split_prims.push_back(rightSplit);
+						rs++;
+
 					}
 				}
 
-				size_t center = i;
-				new (&left ) PrimInfo(begin,center,local_left.geomBounds,local_left.centBounds);
-			  new (&right) PrimInfo(center,end,local_right.geomBounds,local_right.centBounds);
-			  new (&lset) range<size_t>(begin,center);
-			  new (&rset) range<size_t>(center,end);
-			}
+				local_left_split.merge(local_left);
+				local_left_overlap.merge(local_left);
+
+				local_right_split.merge(local_right);
+				local_right_overlap.merge(local_right);
+
+				float splitSah = halfArea(local_left_split.geomBounds) * (l + ls) + halfArea(local_right_split.geomBounds) * (r + rs);
+				float noSplitSah = halfArea(local_left_overlap.geomBounds) * (l + lo) + halfArea(local_right_overlap.geomBounds) * (r + ro);
+
+				int offset;
+				if (splitSah < noSplitSah) {
+					//std::cout << "Splitting" << std::endl;
+					offset = atomic_add(&splitIndex, (r + rs));
+
+/*
+					std::cout << "Copy offset: " << offset << std::endl;
+					std::cout << "l: " << l << ", ls: " << ls << ", lo: " << lo << std::endl;
+					std::cout << "r: " << r << ", rs: " << rs << ", ro: " << ro << std::endl;
 */
+
+					int i;
+					for (i = 0; i < l; i++) {
+						prims[i + begin] = left_prims.data()[i];
+					}
+					for (i = 0; i < ls; i++) {
+						prims[i + begin + l] = left_split_prims.data()[i];
+					}
+					for (i = 0; i < r; i++) {
+						prims[i + offset] = right_prims.data()[i];
+					}
+					for (i = 0; i < rs; i++) {
+						prims[i + offset + r] = right_split_prims.data()[i];
+					}
+
+					/*
+					std::cout << "Dim: " << splitDim << std::endl;
+					std::cout << "Pos: " << splitPos << std::endl;
+					std::cout << local_left_split.geomBounds << std::endl;
+					std::cout << local_right_split.geomBounds << std::endl;
+					*/
+
+					new (&left ) PrimInfo(begin,begin+l+ls,local_left_split.geomBounds,local_left_split.centBounds);
+				  new (&right) PrimInfo(offset,offset+r+rs,local_right_split.geomBounds,local_right_split.centBounds);
+				  new (&lset) range<size_t>(begin,begin+l+ls);
+				  new (&rset) range<size_t>(offset,offset+r+rs);
+
+				}
+				else {
+					int i;
+					for (i = 0; i < l; i++) {
+						prims[i + begin] = left_prims.data()[i];
+					}
+					for (i = 0; i < lo; i++) {
+						prims[i + begin + l] = left_overlap_prims.data()[i];
+					}
+					for (i = 0; i < r; i++) {
+						prims[i + begin + l + lo] = right_prims.data()[i];
+					}
+					for (i = 0; i < ro; i++) {
+						prims[i + begin + l + lo + r] = right_overlap_prims.data()[i];
+					}
+					size_t center = begin+l+lo;
+					new (&left ) PrimInfo(begin,center,local_left_overlap.geomBounds,local_left_overlap.centBounds);
+				  new (&right) PrimInfo(center,end,local_right_overlap.geomBounds,local_right_overlap.centBounds);
+				  new (&lset) range<size_t>(begin,center);
+				  new (&rset) range<size_t>(center,end);
+				}
+
+			}
+
 			void sequential_partition(const Split& split, const Set& set, PrimInfo& left, Set& lset, PrimInfo& right, Set& rset) {
 				const size_t begin = set.begin();
 			  const size_t end   = set.end();
@@ -564,7 +658,7 @@ namespace embree
 				__m256 bounds2 = bounds0;
 				__m256 bounds3 = bounds0;
 
-				unsigned i = first+1;
+				unsigned i = first;
 
 				for (; i+7 < last; i += 8) {
 					unsigned i0 = remap[i+0];
@@ -819,11 +913,11 @@ namespace embree
 			  if (traversalCost + intersectionCost * divPsa * bestSah > (float)((int)(last-first)) * intersectionCost) {
 				  if (last - first > maxLeafSize) {
 
-					//	if (bestSah == std::numeric_limits<float>::infinity()) {
+						if (bestSah == std::numeric_limits<float>::infinity()) {
 					  	pivot = (first + last) >> 1;
 
 							bestBounds = computeBounds(leafBounds, data.indices[bestDim], pivot, last);
-					//	}
+						}
 
 				  }
 
@@ -900,6 +994,8 @@ namespace embree
 
       private:
         PrimRef* prims;
+				Scene* scene;
+				volatile int splitIndex;
       };
   }
 }

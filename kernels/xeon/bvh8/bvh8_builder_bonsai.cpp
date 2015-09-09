@@ -245,6 +245,8 @@ namespace embree
         if ((State::instance()->verbosity(1) && mesh == nullptr))
 	  std::cout << "building BVH8<" << bvh->primTy.name << "> with " << TOSTRING(isa) "::BVH8BuilderSAH " << (presplitFactor != 1.0f ? "presplit" : "") << " ... " << std::flush;
 
+    bool splitTriangles = false;
+
 	double t0 = 0.0f, dt = 0.0f;
 #if PROFILE
 	profile(2,20,numPrimitives,[&] (ProfileTimer& timer)
@@ -257,14 +259,18 @@ namespace embree
           auto virtualprogress = BuildProgressMonitorFromClosure(progress);
 
 	    bvh->alloc2.init_estimate(numSplitPrimitives*sizeof(PrimRef));
-	    prims.resize(numSplitPrimitives);
-	    PrimInfo pinfo = mesh ? createPrimRefArray<Mesh>(mesh,prims,virtualprogress) : createPrimRefArray<Mesh,1>(scene,prims,virtualprogress);
+	    if (splitTriangles)
+        prims.resize(numSplitPrimitives*32);
+      else
+        prims.resize(numSplitPrimitives);
+
+      PrimInfo pinfo = mesh ? createPrimRefArray<Mesh>(mesh,prims,virtualprogress) : createPrimRefArray<Mesh,1>(scene,prims,virtualprogress);
             if (presplitFactor > 1.0f)
               pinfo = presplit<Mesh>(scene, pinfo, prims);
 	    BVH8::NodeRef root;
             BVHBuilderBonsai::build<BVH8::NodeRef>
               (root,CreateBVH8Alloc(bvh),CreateBVH8Node(bvh),CreateBVH8Leaf<Primitive>(bvh,prims.data()), progress,
-               prims.data(),pinfo,BVH8::N,BVH8::maxBuildDepthLeaf,sahBlockSize,minLeafSize,maxLeafSize,BVH8::travCost,intCost);
+               prims.data(),pinfo,BVH8::N,BVH8::maxBuildDepthLeaf,sahBlockSize,minLeafSize,maxLeafSize,BVH8::travCost,intCost, bvh->scene, splitTriangles, pinfo.size());
 
             bvh->set(root,pinfo.geomBounds,pinfo.size());
             //bvh->layoutLargeNodes(numSplitPrimitives*0.005f);
