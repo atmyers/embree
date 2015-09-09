@@ -80,16 +80,13 @@ namespace embree
       const int numberOfTriangles;
 		  volatile int miniTreeCount;
       volatile int splitIndex;
-      bool ttAlloc = false;
 
 		  int underFilledNodes;
-		  //mvector<unsigned> ttIndices[3];
       __restrict unsigned* ttIndices[3];
       __restrict float* ttMidpoints[3];
 		  mvector<unsigned> ttTemporaryIndices;
 		  mvector<unsigned char> ttLeftPartition;
 		  mvector<float> ttAccumulatedArea;
-      //FastSweepData fsd;
       mvector<FastSweepData*> fsd;
       public:
         mvector<BuildRecord> miniTreeRecords;
@@ -122,8 +119,7 @@ namespace embree
 		  /*! bonsai builder */
 
 		  __forceinline void partition(BuildRecord& brecord, BuildRecord& lrecord, BuildRecord& rrecord) {
-			  heuristic.split(brecord.split,brecord.pinfo,brecord.prims,lrecord.pinfo,lrecord.prims,rrecord.pinfo, rrecord.prims, splitTriangles,
-                        brecord.indexRange, lrecord.indexRange, rrecord.indexRange);
+			  heuristic.split(brecord.split,brecord.pinfo,brecord.prims,lrecord.pinfo,lrecord.prims,rrecord.pinfo, rrecord.prims);
 		  }
 
 
@@ -158,13 +154,7 @@ namespace embree
 			  }
 			  BuildRecord left, right;
 			  current.split.dim = getLargestDim(current.pinfo.centBounds);
-        current.split.index = 1;
-        if (current.split.dim == -1) {
-          current.split.dim = 0;
-          current.split.index = 0;
-        }
-
-			  current.split.pos = current.pinfo.centBounds.center()[current.split.dim];
+        current.split.pos = current.pinfo.centBounds.center()[current.split.dim];
 
 			  partition(current, left, right);
 
@@ -267,7 +257,7 @@ namespace embree
 			  }
 			  else {
 #if 0
-        FastSweepData data((int)(MAX_MINI_TREE_SIZE*1.5f + 1), maxLeafSize);
+        FastSweepData data((int)(MAX_MINI_TREE_SIZE), maxLeafSize);
         Allocator alloc = createAlloc();
 				  for (int i = 0; i < miniTreeCount; ++i) {
 					  BuildRecord& br = miniTreeRecords[i];
@@ -306,19 +296,15 @@ namespace embree
 				  for (; treeID < miniTreeCount - granularity + 1; treeID += granularity) {
 
             SPAWN(([this, treeID, miniTreeRoots, granularity] {
-            //threadPool.spawn(([this, treeID, miniTreeRoots, granularity] (unsigned) {
               int threadIndex = TaskSchedulerTBB::threadIndex();
               FastSweepData& data = (*fsd.data()[threadIndex]);
-              //FastSweepData data((int)(MAX_MINI_TREE_SIZE*1.5f + 1), maxLeafSize);
 
               Allocator alloc = createAlloc();
 
 						  for (int i = treeID; i < treeID + granularity; ++i) {
-                //std::cout << "i: " << i  << std::endl;
                 BuildRecord& br = miniTreeRecords[i];
 
                 int offset = br.prims.begin();
-                //data.setOffset(br.prims.begin());
 							  br.parent = (size_t*)&(miniTreeRoots.data()[i]);
 							  br.depth = 0;
 							  br.prims = range<size_t>(0, br.prims.size());
@@ -331,11 +317,8 @@ namespace embree
 				  }
           if (treeID < miniTreeCount) {
 				  SPAWN(([this, treeID, miniTreeRoots] {
-          //threadPool.spawn(([this, treeID, miniTreeRoots] (unsigned) {
             int threadIndex = TaskSchedulerTBB::threadIndex();
-            //FastSweepData& data = fsd.data()[threadIndex];
             FastSweepData& data = (*fsd.data()[threadIndex]);
-            //FastSweepData data((int)(MAX_MINI_TREE_SIZE*1.5f + 1), maxLeafSize);
 
             Allocator alloc = createAlloc();
 
@@ -512,6 +495,8 @@ namespace embree
 				  for (size_t i=0; i<numChildren; i++)
 				  {
 					  //float currentSAH = children[i].pinfo.leafSAH();
+             // not clear why, but tree quality is improved. I would like to try
+             // the max depth of the set of mini trees times the area as a cost measurement.
             float currentSAH = children[i].pinfo.leafSAH(32);
 					  if (children[i].pinfo.size() == 1) continue;
 					  if (currentSAH > largestSAH) { largestChild = i; largestSAH = currentSAH; }
@@ -612,25 +597,7 @@ namespace embree
         SPAWN(([&] {sortedIndicesFromFloats(ttMidpoints[1], ttIndices[1], miniTreeCount);}));
         SPAWN(([&] {sortedIndicesFromFloats(ttMidpoints[2], ttIndices[2], miniTreeCount);}));
         SPAWN_END;
-/*
-        struct Cmp {
-				  Cmp(float* mid) : mid(mid) {}
-				  float* mid;
-				  bool operator () (int a, int b) { return mid[a] < mid[b]; }
-			  };
 
-        for (int i = 0; i < miniTreeCount; i++) {
-				  ttIndices[0][i] = i;
-				  ttIndices[1][i] = i;
-				  ttIndices[2][i] = i;
-			  }
-
-        SPAWN_BEGIN;
-			  SPAWN(([&] {std::sort(ttIndices[0], ttIndices[0] + miniTreeCount, Cmp(ttMidpoints[0]));}));
-			  SPAWN(([&] {std::sort(ttIndices[1], ttIndices[1] + miniTreeCount, Cmp(ttMidpoints[1]));}));
-			  SPAWN(([&] {std::sort(ttIndices[2], ttIndices[2] + miniTreeCount, Cmp(ttMidpoints[2]));}));
-        SPAWN_END;
-*/
       }
 
 		  void buildTopTree(BuildRecord& rootRecord) {
@@ -661,6 +628,7 @@ namespace embree
 			  }
 		  }
 
+      // digs in to mini trees and removes too large pieces, which become mini trees of their own
 		  void prune() {
 			  float averageArea = 0;
 			  for (int i = 0; i < miniTreeCount; i++) {
@@ -715,7 +683,8 @@ namespace embree
         __forceinline const ReductionTy operator() (BuildRecord& record)
         {
 
-
+      // should be more sofisticated, top tree sweep is performed
+      // on an array of buildrecords, but should only be on BBoxes and indices
 			miniTreeRecords.resize((numberOfTriangles/MAX_MINI_TREE_SIZE)*4);
 			miniTreeRecordsPruned.resize((numberOfTriangles/MAX_MINI_TREE_SIZE)*4*64);
 			miniTreeCount = 0;
@@ -723,30 +692,30 @@ namespace embree
 
 
 
-			auto t = startTime();
+			//auto t = startTime();
 			miniTreeSelectRescursive(record);
 
-			printTime("\nMini tree select", t);
-			std::cout << "Mini tree count: " << miniTreeCount << std::endl;
+			//printTime("\nMini tree select", t);
+			//std::cout << "Mini tree count: " << miniTreeCount << std::endl;
 			mvector<size_t*> miniTreeRoots(miniTreeCount);
 
-			t = startTime();
+			//t = startTime();
 			buildMiniTrees(miniTreeRoots);
-			printTime("Build mini trees", t);
+			//printTime("Build mini trees", t);
 
-			t = startTime();
+			//t = startTime();
 			if (PRUNING_THRESHOLD < 1.f && PRUNING_THRESHOLD > 0.f) {
 				prune();
 				//miniTreeRecordsPruned = miniTreeRecords;
 			}
-			printTime("Pruning", t);
-			std::cout << "Mini tree count after pruning: " << miniTreeCount << std::endl;
-			t = startTime();
+			//printTime("Pruning", t);
+			//std::cout << "Mini tree count after pruning: " << miniTreeCount << std::endl;
+			//t = startTime();
 			if (miniTreeCount > 1)
 				buildTopTree(record);
 			else
 				record = miniTreeRecords[0];
-			printTime("Build top tree", t);
+			//printTime("Build top tree", t);
 			//std::cout << "Underfilled nodes: " << underFilledNodes << std::endl;
 			return 0;
 	    }

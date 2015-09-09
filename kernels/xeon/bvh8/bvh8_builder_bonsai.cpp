@@ -245,7 +245,7 @@ namespace embree
         if ((State::instance()->verbosity(1) && mesh == nullptr))
 	  std::cout << "building BVH8<" << bvh->primTy.name << "> with " << TOSTRING(isa) "::BVH8BuilderSAH " << (presplitFactor != 1.0f ? "presplit" : "") << " ... " << std::flush;
 
-    bool splitTriangles = false;
+    bool splitTriangles = false; // not currently used
 
 	double t0 = 0.0f, dt = 0.0f;
 #if PROFILE
