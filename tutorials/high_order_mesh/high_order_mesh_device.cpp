@@ -46,6 +46,19 @@ void error_handler(const RTCError code, const char* str)
 //                     User defined patch geometry                          //
 // ======================================================================== //
 
+/*
+ * This file contains an implementation of a user-defined geometry for 
+ * quadratic patches. It includes a data container for such patches,
+ * as well as functions that are used to compute the intersection point
+ * between rays and patches. This intersection operation cannot be done 
+ * analytically, so Newton iteration is peformed instead.
+ */
+
+
+/*
+ * A data container for a quadratic patch, consisting of 8 vertices, each of
+ * is associated with a data value.  
+ */
 struct Patch
 {
   ALIGNED_STRUCT
@@ -54,6 +67,13 @@ struct Patch
   unsigned int geomID;
 };
 
+
+/*
+ * This defines the parametric form of the surface of the patch, S(u, v).
+ * u and v are parametric coordinates that vary between -1.0 and 1.0 over
+ * the surface of the patch. The returned vector is the physical (x, y, z)
+ * location of the point in space corresponding to the input u and v values.
+ */
 Vec3fa patchSurfaceFunc(const Patch& patch, const float u, const float v)
 {
   return 0.25*(1.0 - u)*(1.0 - v)*(-u - v - 1)*patch.v[0] + 
@@ -66,6 +86,12 @@ Vec3fa patchSurfaceFunc(const Patch& patch, const float u, const float v)
          0.5*(1 - u*u)*(1 + v)*patch.v[7];
 }
 
+
+/*
+ * This is the partial derivative of S(u, v) with respect to u.
+ * Used to compute the Jacobian matrix when iterating to find the
+ * intersection point.
+ */
 Vec3fa patchSurfaceDerivU(const Patch& patch, const float u, const float v)
 {
   return (-0.25*(v - 1.0)*(u + v + 1) - 0.25*(u - 1.0)*(v - 1.0))*patch.v[0] + 
@@ -76,6 +102,12 @@ Vec3fa patchSurfaceDerivU(const Patch& patch, const float u, const float v)
          0.5*(v*v - 1.0)*patch.v[6] - u*(v + 1.0)*patch.v[7];
 }
 
+
+/*
+ * This is the partial derivative of S(u, v) with respect to v.
+ * Used to compute the Jacobian matrix when iterating to find the
+ * intersection point.
+ */
 Vec3fa patchSurfaceDerivV(const Patch& patch, const float u, const float v)
 {
   return (-0.25*(u - 1.0)*(u + v + 1) - 0.25*(u - 1.0)*(v - 1.0))*patch.v[0] + 
@@ -86,6 +118,11 @@ Vec3fa patchSurfaceDerivV(const Patch& patch, const float u, const float v)
          0.5*(u*u - 1.0)*patch.v[7] - v*(u + 1.0)*patch.v[6];
 }
 
+
+/*
+ * This function defines the axis-aligned bounding box associated with a 
+ * patch, which is computed by finding the extrema of the patches vertices.
+ */
 void patchBoundsFunc(const Patch* patches, size_t item, RTCBounds* bounds_o)
 {
   const Patch& patch = patches[item];
@@ -116,6 +153,12 @@ void patchBoundsFunc(const Patch* patches, size_t item, RTCBounds* bounds_o)
   bounds_o->upper_z = hi_z;
 }
 
+
+/*
+ * This function is used to interpolate the data values from the vertices 
+ * to some point on the surface expressed in the parametric coordinates 
+ * u and v.
+ */
 float patchInterpolationFunc(const Patch& patch, const float u, const float v)
 {
   return 0.25*(1.0 - u)*(1.0 - v)*(-u - v - 1)*patch.d[0] +
@@ -128,6 +171,11 @@ float patchInterpolationFunc(const Patch& patch, const float u, const float v)
     0.5*(1 - u*u)*(1 + v)*patch.d[7];
 }
 
+
+/*
+ * This function is used to map a floating point value in the range vmin 
+ * to vmax to a color value in (r, g, b) space.
+ */
 Vec3fa mapToColormap(float v,
 		     float vmin,
 		     float vmax)
@@ -162,14 +210,17 @@ Vec3fa mapToColormap(float v,
   return(c);
 }
 
+
+/*
+ * This is the function that computes the intersection between a ray and a 
+ * Patch primitive. If we have a hit, it updates the ray information.
+ */
 void patchIntersectFunc(const Patch* patches, RTCRay& ray, size_t item)
 {
   const Patch& patch = patches[item];
-
-  // otherwise, iterate to the get the true hit position
   const Vec3fa dir = ray.dir / dot(ray.dir, ray.dir);
-  Vec3fa N1, N2;
-  
+
+  Vec3fa N1, N2;  
   if ((fabs(dir.x) > fabs(dir.y)) && (fabs(dir.x) > fabs(dir.z))) {
       N1 = Vec3fa(dir.y, -dir.x, 0.0);
     }
@@ -227,6 +278,7 @@ void patchIntersectFunc(const Patch* patches, RTCRay& ray, size_t item)
   }
 
   if (fabs(u) <= 1.0 and fabs(v) <= 1.0 and iterations < max_iter) {
+    // hit
     ray.u = u;
     ray.v = v;
     ray.tfar = t;
@@ -239,13 +291,17 @@ void patchIntersectFunc(const Patch* patches, RTCRay& ray, size_t item)
   return;
 }
 
+
+/*
+ * This is the function that computes whether or not we have *any* hit  
+ * between a ray and this geometry.
+ */
 void patchOccludedFunc(const Patch* patches, RTCRay& ray, size_t item)
 {
   const Patch& patch = patches[item];
-  const float A = dot(ray.dir, ray.dir);
-  const Vec3fa dir = ray.dir / A;
-  Vec3fa N1, N2;
-  
+  const Vec3fa dir = ray.dir / dot(ray.dir, ray.dir);
+
+  Vec3fa N1, N2;  
   if ((fabs(dir.x) > fabs(dir.y)) && (fabs(dir.x) > fabs(dir.z))) {
       N1 = Vec3fa(dir.y, -dir.x, 0.0);
     }
@@ -308,6 +364,11 @@ void patchOccludedFunc(const Patch* patches, RTCRay& ray, size_t item)
   return;
 }
 
+
+/*
+ * This reads the finite element data stored in the ASCII files hex20_out.txt 
+ * and hex20_temp.txt and uses them to initialize a mesh of Quadratic Patches.
+ */
 Patch* createMesh(RTCScene scene, size_t N)
 {
   unsigned int geomID = rtcNewUserGeometry(scene, N);
