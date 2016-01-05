@@ -18,39 +18,6 @@
 #include <math.h>
 #include <iostream>
 
-void parse_txt() 
-{
-  int index;
-  float f1, f2, f3, f4, f5, f6, f7, f8;
-  float f9, f10, f11, f12, f13, f14, f15, f16;
-  float f17, f18, f19, f20, f21, f22, f23, f24;
-  std::string line;
-  std::ifstream myfile ("/Users/atmyers/embree/tutorials/high_order_mesh/hex20_out.txt");
-  if (myfile.is_open())
-    {
-      while (myfile >> index >> f1 >> f2 >> f3 >> f4 >> f5 >> f6 >> f7 >> f8 >>
-	     f9 >> f10 >> f11 >> f12 >> f13 >> f14 >> f15 >> f16 >> f17 >> f18 >>
-	     f19 >> f20 >> f21 >> f22 >> f23 >> f24)
-	{
-	  std::cout << index << '\n';
-	  std::cout << f1 << " " << f2 << " " << f3 << std::endl;
-	  std::cout << f4 << " " << f5 << " " << f6 << std::endl;
-	  std::cout << f7 << " " << f8 << " " << f9 << std::endl;
-	  std::cout << f10 << " " << f11 << " " << f12 << std::endl;
-	  std::cout << f13 << " " << f14 << " " << f15 << std::endl;
-	  std::cout << f16 << " " << f17 << " " << f18 << std::endl;
-	  std::cout << f19 << " " << f20 << " " << f21 << std::endl;
-	  std::cout << f22 << " " << f23 << " " << f24 << std::endl;
-	  std::cout << std::endl;
-	}
-      myfile.close();
-    }
-
-  else std::cout << "Unable to open file"; 
-
-  return;
-}
-
 /* render function to use */
 renderPixelFunc renderPixel;
 
@@ -75,26 +42,6 @@ void error_handler(const RTCError code, const char* str)
   exit(1);
 }
 
-struct RTCRay2
-{
-  Vec3fa org;     //!< Ray origin
-  Vec3fa dir;     //!< Ray direction
-  float tnear;   //!< Start of ray segment
-  float tfar;    //!< End of ray segment
-  float time;    //!< Time of this ray for motion blur.
-  int mask;      //!< used to mask out objects during traversal
-  Vec3fa Ng;      //!< Geometric normal.
-  float u;       //!< Barycentric u coordinate of hit
-  float v;       //!< Barycentric v coordinate of hit
-  int geomID;    //!< geometry ID
-  int primID;    //!< primitive ID
-  int instID;    //!< instance ID
-
-  // ray extensions
-  int num_hits; // total number of hits 
-};
-
-
 // ======================================================================== //
 //                     User defined patch geometry                          //
 // ======================================================================== //
@@ -103,6 +50,7 @@ struct Patch
 {
   ALIGNED_STRUCT
   Vec3fa v[8];
+  float d[8];
   unsigned int geomID;
 };
 
@@ -168,8 +116,53 @@ void patchBoundsFunc(const Patch* patches, size_t item, RTCBounds* bounds_o)
   bounds_o->upper_z = hi_z;
 }
 
+float patchInterpolationFunc(const Patch& patch, const float u, const float v)
+{
+  return 0.25*(1.0 - u)*(1.0 - v)*(-u - v - 1)*patch.d[0] +
+    0.25*(1.0 + u)*(1.0 - v)*( u - v - 1)*patch.d[1] +
+    0.25*(1.0 + u)*(1.0 + v)*( u + v - 1)*patch.d[2] +
+    0.25*(1.0 - u)*(1.0 + v)*(-u + v - 1)*patch.d[3] +
+    0.5*(1 - u)*(1 - v*v)*patch.d[4] +
+    0.5*(1 - u*u)*(1 - v)*patch.d[5] +
+    0.5*(1 + u)*(1 - v*v)*patch.d[6] +
+    0.5*(1 - u*u)*(1 + v)*patch.d[7];
+}
 
-void patchIntersectFunc(const Patch* patches, RTCRay2& ray, size_t item)
+Vec3fa mapToColormap(float v,
+		     float vmin,
+		     float vmax)
+{
+  Vec3fa c;
+  c.x = 1.0;
+  c.y = 1.0;
+  c.z = 1.0;
+
+  float dv;
+
+  if (v < vmin)
+    v = vmin;
+  if (v > vmax)
+    v = vmax;
+  dv = vmax - vmin;
+
+  if (v < (vmin + 0.25 * dv)) {
+    c.x = 0;
+    c.y = 4 * (v - vmin) / dv;
+  } else if (v < (vmin + 0.5 * dv)) {
+    c.x = 0;
+    c.z = 1 + 4 * (vmin + 0.25 * dv - v) / dv;
+  } else if (v < (vmin + 0.75 * dv)) {
+    c.x = 4 * (v - vmin - 0.5 * dv) / dv;
+    c.z = 0;
+  } else {
+    c.y = 1 + 4 * (vmin + 0.75 * dv - v) / dv;
+    c.z = 0;
+  }
+
+  return(c);
+}
+
+void patchIntersectFunc(const Patch* patches, RTCRay& ray, size_t item)
 {
   const Patch& patch = patches[item];
 
@@ -196,9 +189,9 @@ void patchIntersectFunc(const Patch* patches, RTCRay2& ray, size_t item)
   float fv = dot(N2, S) + d2;
 
   float err = max(fabs(fu), fabs(fv));
-  float tol = 1.0e-6;
+  float tol = 1.0e-5;
   int iterations = 0;
-  int max_iter = 5;
+  int max_iter = 10;
   bool converged = false;
   Vec3fa Su, Sv;
   while ((err > tol) and (iterations < max_iter))
@@ -240,13 +233,13 @@ void patchIntersectFunc(const Patch* patches, RTCRay2& ray, size_t item)
     ray.geomID = patch.geomID;
     ray.primID = item;
     ray.Ng = cross(Su, Sv);
-    ray.num_hits += 1;
+    ray.time = patchInterpolationFunc(patch, u, v);
   }
 
   return;
 }
 
-void patchOccludedFunc(const Patch* patches, RTCRay2& ray, size_t item)
+void patchOccludedFunc(const Patch* patches, RTCRay& ray, size_t item)
 {
   const Patch& patch = patches[item];
   const float A = dot(ray.dir, ray.dir);
@@ -324,28 +317,45 @@ Patch* createMesh(RTCScene scene, size_t N)
   float f1, f2, f3, f4, f5, f6, f7, f8;
   float f9, f10, f11, f12, f13, f14, f15, f16;
   float f17, f18, f19, f20, f21, f22, f23, f24;
-  float fac = 10.0;
-  std::string line;
-  std::ifstream myfile ("/Users/atmyers/embree/tutorials/high_order_mesh/hex20_out.txt");
-  if (myfile.is_open())
+  std::ifstream meshfile ("/Users/atmyers/embree/tutorials/high_order_mesh/hex20_out.txt");
+  if (meshfile.is_open())
     {
-      while (myfile >> index >> f1 >> f2 >> f3 >> f4 >> f5 >> f6 >> f7 >> f8 >>
+      while (meshfile >> index >> f1 >> f2 >> f3 >> f4 >> f5 >> f6 >> f7 >> f8 >>
 	     f9 >> f10 >> f11 >> f12 >> f13 >> f14 >> f15 >> f16 >> f17 >> f18 >>
 	     f19 >> f20 >> f21 >> f22 >> f23 >> f24)
 	{
 
 	  patches[index].geomID = geomID;
 	  
-	  patches[index].v[0] = fac*Vec3fa( f1,  f2,  f3);
-	  patches[index].v[1] = fac*Vec3fa( f4,  f5,  f6);
-	  patches[index].v[2] = fac*Vec3fa( f7,  f8,  f9);
-	  patches[index].v[3] = fac*Vec3fa( f10, f11, f12);
-	  patches[index].v[4] = fac*Vec3fa( f13, f14, f15);
-	  patches[index].v[5] = fac*Vec3fa( f16, f17, f18);
-	  patches[index].v[6] = fac*Vec3fa( f19, f20, f21);
-	  patches[index].v[7] = fac*Vec3fa( f22, f23, f24);
+	  patches[index].v[0] = Vec3fa( f1,  f2,  f3);
+	  patches[index].v[1] = Vec3fa( f4,  f5,  f6);
+	  patches[index].v[2] = Vec3fa( f7,  f8,  f9);
+	  patches[index].v[3] = Vec3fa( f10, f11, f12);
+	  patches[index].v[4] = Vec3fa( f13, f14, f15);
+	  patches[index].v[5] = Vec3fa( f16, f17, f18);
+	  patches[index].v[6] = Vec3fa( f19, f20, f21);
+	  patches[index].v[7] = Vec3fa( f22, f23, f24);
 	}
-      myfile.close();
+      meshfile.close();
+    }
+
+  else std::cout << "Unable to open file"; 
+
+  std::ifstream datafile ("/Users/atmyers/embree/tutorials/high_order_mesh/hex20_temp.txt");
+  if (datafile.is_open())
+    {
+      while (datafile >> index >> f1 >> f2 >> f3 >> f4 >> f5 >> f6 >> f7 >> f8)
+	{	  
+	  patches[index].d[0] = f1;
+	  patches[index].d[1] = f2;
+	  patches[index].d[2] = f3;
+	  patches[index].d[3] = f4;
+	  patches[index].d[4] = f5;
+	  patches[index].d[5] = f6;
+	  patches[index].d[6] = f7;
+	  patches[index].d[7] = f8;
+	}
+      datafile.close();
     }
 
   else std::cout << "Unable to open file"; 
@@ -359,8 +369,6 @@ Patch* createMesh(RTCScene scene, size_t N)
 
 /* scene data */
 RTCScene g_scene  = nullptr;
-
-Vec3fa colors[6];
 
 /* called by the C++ code for initialization */
 extern "C" void device_init (char* cfg)
@@ -379,15 +387,6 @@ extern "C" void device_init (char* cfg)
 
   rtcCommit(g_scene);
 
-  /* set all colors */
-  colors[0] = Vec3fa(1.0,0.0,0);
-  colors[1] = Vec3fa(1.0,0.5,0);
-  colors[2] = Vec3fa(1.0,1.0,0.0);
-  colors[3] = Vec3fa(0.5,1.0,0.0);
-  colors[4] = Vec3fa(1.0,0.0,1.0);
-  colors[5] = Vec3fa(1.0,0.5,1.0);
-  colors[6] = Vec3fa(0.5,1.0,1.0);
-
   /* set start render mode */
   renderPixel = renderPixelStandard;
 }
@@ -396,7 +395,7 @@ extern "C" void device_init (char* cfg)
 Vec3fa renderPixelStandard(float x, float y, const Vec3fa& vx, const Vec3fa& vy, const Vec3fa& vz, const Vec3fa& p)
 {
   /* initialize ray */
-  RTCRay2 ray;
+  RTCRay ray;
   ray.org = p;
   ray.dir = normalize(x*vx + y*vy + vz);
   ray.tnear = 0.0f;
@@ -406,23 +405,15 @@ Vec3fa renderPixelStandard(float x, float y, const Vec3fa& vx, const Vec3fa& vy,
   ray.instID = 4; // set default instance ID
   ray.mask = -1;
   ray.time = 0;
-  ray.num_hits = 0;
 
   /* intersect ray with scene */
-  rtcIntersect(g_scene,*((RTCRay*)&ray));
+  rtcIntersect(g_scene, ray);
   
   /* shade pixels */
   Vec3fa color = Vec3fa(0.0f);
   if (ray.geomID != RTC_INVALID_GEOMETRY_ID) 
   {
-    Vec3fa diffuse = Vec3fa(0.5,0.5,0.5);
-    //    diffuse = colors[ray.num_hits];
-    color = color + diffuse;
-
-    // color the element edges white
-    //    if ((fabs(fabs(ray.u) - 1.0) < 1.0e-1) or (fabs(fabs(ray.v) - 1.0) < 1.0e-1)) {
-    //      color = Vec3fa(1.0, 1.0, 1.0);
-    //    }
+    color = mapToColormap(ray.time, 200.0, 1500.0);
   }
   return color;
 }
